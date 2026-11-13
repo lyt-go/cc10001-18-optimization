@@ -88,6 +88,7 @@ class TaskcrawlEntry(BaseModel):
     field_5: str | None = None  # 批次大小
     field_6: str | None = None  # 起始水位
     field_7: str | None = None  # 截止水位
+    template_code: str | None = None  # 绑定的采集模板编号
 
 class PipelineEntry(BaseModel):
     """处理管道明细结构。"""
@@ -172,6 +173,7 @@ class SchedulerEntry(BaseModel):
     field_5: str | None = None  # 优先级
     field_6: str | None = None  # 超时分钟
     field_7: str | None = None  # 依赖计划
+    template_code: str | None = None  # 模板排期视图绑定的模板编号
 
 class ExportconfEntry(BaseModel):
     """输出配置明细结构。"""

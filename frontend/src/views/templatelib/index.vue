@@ -36,7 +36,7 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">{{ formatCell(row[column]) }}</td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -47,6 +47,7 @@
             >
               {{ action }}
             </button>
+            <button class="link" type="button" @click="selectRow(row)">查看版本与受影响任务</button>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -59,15 +60,115 @@
       <span>共 {{ total }} 条模板库记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
+
+    <section v-if="detail" class="detail-panel">
+      <header class="detail-head">
+        <div>
+          <h3>{{ detail.模板编号 }} · 版本 {{ detail.版本标识 }}</h3>
+          <p class="page-desc">
+            状态 {{ detail.模板状态 }}；校验指纹 {{ detail.校验指纹 }}；
+            {{ conclusionLabel }}
+          </p>
+          <p v-if="detail.生效版本 && !detail.配置与生效版本一致" class="error-text">
+            当前配置为 {{ detail.版本标识 }}，已发布版本仍是 {{ detail.生效版本 }}，需重新验证并发布后才能启动任务。
+          </p>
+        </div>
+        <button class="btn ghost" type="button" @click="detail = null">收起</button>
+      </header>
+
+      <div class="detail-grid">
+        <article class="detail-card">
+          <h4>当前版本整套配置</h4>
+          <ul class="detail-list">
+            <li>站点分类：{{ detail.完整配置.配置.站点分类 ?? '—' }}</li>
+            <li>分页配置：{{ detail.完整配置.配置.分页配置 ?? '—' }}</li>
+            <li>请求模板：{{ detail.完整配置.配置.请求模板 ?? '—' }}</li>
+            <li>适用域名 / 字符编码：{{ detail.完整配置.配置.适用域名 ?? '—' }} / {{ detail.完整配置.配置.字符编码 ?? '—' }}</li>
+            <li>解析规则：{{ detail.完整配置.解析规则.map((rule) => `${rule.规则编号}(${rule.状态})`).join('、') || '—' }}</li>
+            <li>输出字段（{{ detail.完整配置.配置.字段映射.length }} 个）：{{ detail.完整配置.配置.字段映射.join('、') || '—' }}</li>
+            <li v-if="detail.完整配置.缺失规则.length">缺失规则：{{ detail.完整配置.缺失规则.join('、') }}</li>
+            <li v-if="detail.完整配置.已废弃规则.length">已废弃规则：{{ detail.完整配置.已废弃规则.join('、') }}</li>
+          </ul>
+        </article>
+
+        <article class="detail-card">
+          <h4>校验结论</h4>
+          <ul class="detail-list">
+            <li>结果：{{ detail.校验结论?.结果 ?? '尚未提交验证' }}</li>
+            <li>来源：{{ detail.校验结论 ? impactSourceLabel(detail.校验结论.来源) : '—' }}</li>
+            <li>可复用：{{ detail.结论可复用 ? '是（同一指纹有效期内）' : '否（配置或有效期已变化）' }}</li>
+            <li>验证时间：{{ detail.验证时间 ?? '—' }}</li>
+            <li>有效期至：{{ detail.有效期至 ?? '—' }}</li>
+            <li>原因：{{ detail.校验结论?.原因 ?? '—' }}</li>
+          </ul>
+          <p v-if="detail.校验结论 && !detail.结论可复用" class="error-text">
+            旧结论已失效，引用该模板的任务需按当前版本重新验证。
+          </p>
+        </article>
+      </div>
+
+      <div class="detail-grid">
+        <article class="detail-card">
+          <h4>版本历史（回滚按整套字段读取）</h4>
+          <ul class="detail-list">
+            <li v-for="version in detail.版本历史" :key="version.版本标识">
+              <span :class="version.当前版本 ? 'tag-current' : ''">{{ version.版本标识 }}</span>
+              · 分页「{{ version.分页配置 ?? '—' }}」
+              · 字段 {{ version.字段映射.length }} 个
+              · {{ version.曾生效 ? '曾生效' : '未生效' }}
+              <button
+                v-if="version.曾生效 && !version.当前版本"
+                class="link"
+                type="button"
+                @click="rollback(version.版本标识)"
+              >
+                回滚到此版本
+              </button>
+            </li>
+            <li v-if="!detail.版本历史.length">暂无版本记录</li>
+          </ul>
+        </article>
+
+        <article class="detail-card">
+          <h4>受影响任务（{{ impact?.受影响任务数 ?? 0 }} 个不可启动）</h4>
+          <ul class="detail-list">
+            <li v-for="task in impact?.任务 ?? []" :key="task.任务编号">
+              {{ task.任务编号 }} · 版本 {{ task.版本标识 }} ·
+              <strong :class="task.可启动 ? 'ok-text' : 'error-text'">
+                {{ task.可启动 ? '可启动' : '不可启动' }}
+              </strong>
+              <p class="detail-note">{{ task.受影响原因 }}</p>
+              <p v-if="task.历史运行配置" class="detail-note">
+                历史运行版本 {{ task.历史运行配置.版本标识 }}（{{ task.历史运行配置.字段映射.length }} 个字段），不回写。
+              </p>
+            </li>
+            <li v-if="!impact?.任务.length">暂无任务引用该模板</li>
+          </ul>
+          <ul class="detail-list">
+            <li v-for="plan in impact?.排期计划 ?? []" :key="plan.计划编号">
+              排期计划 {{ plan.计划编号 }} · {{ plan.关联任务 }} · {{ plan.状态 }}
+            </li>
+          </ul>
+        </article>
+      </div>
+    </section>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
+import {
+  fetchTemplateImpact,
+  fetchTemplateVersions,
+  impactSourceLabel,
+  rollbackTemplate,
+  type TemplateImpact,
+  type TemplateVersionDetail,
+} from '@/api/versioning'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | string[] | null>
 
 const ENDPOINT = '/api/templatelib'
 const columns = ["模板编号", "站点分类", "模板名称", "解析规则集", "请求模板", "分页配置", "适用域名", "生效版本"]
@@ -80,6 +181,20 @@ const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const detail = ref<TemplateVersionDetail | null>(null)
+const impact = ref<TemplateImpact | null>(null)
+
+const conclusionLabel = computed(() => {
+  if (!detail.value?.校验结论) return '尚未提交模板验证'
+  return detail.value.结论可复用
+    ? `结论有效期内可复用（${detail.value.校验结论.结果}）`
+    : `旧结论已失效（${detail.value.校验结论.结果}）`
+})
+
+function formatCell(value: Row[string]) {
+  if (Array.isArray(value)) return value.join('、')
+  return value ?? '—'
+}
 
 function resetFilters() {
   filters.value = {}
@@ -94,6 +209,50 @@ function openCreate() {
   errorMessage.value = '采集模板登记入口尚未接入审批流'
 }
 
+async function selectRow(row: Row) {
+  errorMessage.value = ''
+  try {
+    const [versionDetail, templateImpact] = await Promise.all([
+      fetchTemplateVersions(Number(row.id)),
+      fetchTemplateImpact(Number(row.id)),
+    ])
+    detail.value = versionDetail
+    impact.value = templateImpact
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '模板版本读取失败'
+  }
+}
+
+async function refreshDetail(entryId: number) {
+  const [versionDetail, templateImpact] = await Promise.all([
+    fetchTemplateVersions(entryId),
+    fetchTemplateImpact(entryId),
+  ])
+  detail.value = versionDetail
+  impact.value = templateImpact
+}
+
+async function rollback(versionId: string) {
+  if (!detail.value) return
+  const row = rows.value.find((item) => item.模板编号 === detail.value?.模板编号)
+  if (!row) {
+    errorMessage.value = '找不到当前模板记录，请刷新列表后重试'
+    return
+  }
+  errorMessage.value = ''
+  try {
+    const payload = await rollbackTemplate(Number(row.id), versionId)
+    if (!payload.ok) {
+      throw new Error(payload.message || '模板回滚失败')
+    }
+    errorMessage.value = payload.message
+    await reload()
+    await refreshDetail(Number(row.id))
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '模板回滚失败'
+  }
+}
+
 async function runAction(action: string, row: Row) {
   errorMessage.value = ''
   try {
@@ -104,7 +263,15 @@ async function runAction(action: string, row: Row) {
     if (!response.ok) {
       throw new Error('模板库动作未生效，请稍后重试')
     }
+    const payload = await response.json()
+    if (!payload.ok) {
+      throw new Error(payload.message || '模板库动作未生效')
+    }
+    errorMessage.value = payload.message ?? ''
     await reload()
+    if (detail.value?.模板编号 === row.模板编号) {
+      await refreshDetail(Number(row.id))
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '模板库操作失败'
   }

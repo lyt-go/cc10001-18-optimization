@@ -1,4 +1,7 @@
-"""调度计划接口：维护调度计划，覆盖提交审批、确认排期、暂停计划等动作。"""
+"""调度计划接口：维护调度计划，覆盖提交审批、确认排期、暂停计划等动作。
+
+静态路径（``/export``、``/schedule``）注册在 ``/{entry_id}`` 之前，避免被当成 entry_id。
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -30,15 +33,6 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
-@router.get("/{entry_id}", response_model=dict)
-def get_entry(entry_id: int) -> dict:
-    """读取单条调度计划明细；不存在时给出可读的错误说明。"""
-    entry = service.get_entry(entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"调度计划 {entry_id} 不存在或已归档")
-    return entry
-
-
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
     """登记一条调度计划，缺字段时说明原因而不是静默丢弃。"""
@@ -46,6 +40,37 @@ def create_entry(payload: EntryPayload) -> ActionResult:
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
     return ActionResult(ok=True, message="调度计划已登记", entry=entry)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出调度计划清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "scheduler", "total": total, "items": items}
+
+
+@router.get("/schedule", response_model=dict)
+def get_schedule_view() -> dict:
+    """调度计划视图：按模板当前版本判断每个计划能否排期，失效原因与模板详情页一致。"""
+    return service.schedule_view()
+
+
+@router.get("/{entry_id}/impact", response_model=dict)
+def get_impact(entry_id: int) -> dict:
+    """单个计划的排期判断：任务是否可启动、模板当前版本与历史运行配置。"""
+    view = service.plan_view(entry_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail=f"调度计划 {entry_id} 不存在或已归档")
+    return view
+
+
+@router.get("/{entry_id}", response_model=dict)
+def get_entry(entry_id: int) -> dict:
+    """读取单条调度计划明细；不存在时给出可读的错误说明。"""
+    entry = service.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"调度计划 {entry_id} 不存在或已归档")
+    return entry
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
@@ -56,10 +81,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出调度计划清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "scheduler", "total": total, "items": items}

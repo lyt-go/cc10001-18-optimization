@@ -1,4 +1,8 @@
-"""采集任务接口：维护采集任务，覆盖提交调度、启动任务、终止任务等动作。"""
+"""采集任务接口：维护采集任务，覆盖提交调度、启动任务、终止任务等动作。
+
+静态路径（``/export``、``/schedule``）注册在 ``/{entry_id}`` 之前，
+避免 ``schedule`` 被当作 entry_id 解析成 422。
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -30,15 +34,6 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
-@router.get("/{entry_id}", response_model=dict)
-def get_entry(entry_id: int) -> dict:
-    """读取单条采集任务明细；不存在时给出可读的错误说明。"""
-    entry = service.get_entry(entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"采集任务 {entry_id} 不存在或已归档")
-    return entry
-
-
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
     """登记一条采集任务，缺字段时说明原因而不是静默丢弃。"""
@@ -46,6 +41,45 @@ def create_entry(payload: EntryPayload) -> ActionResult:
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
     return ActionResult(ok=True, message="采集任务已登记", entry=entry)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出采集任务清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "taskcrawl", "total": total, "items": items}
+
+
+@router.get("/schedule", response_model=dict)
+def get_schedule_view(
+    template_code: str | None = Query(default=None, description="只看某个模板"),
+) -> dict:
+    """任务排期视图：按模板当前版本算出每个任务能否启动，与模板详情页共享同一指纹。"""
+    view = service.schedule_view()
+    if template_code:
+        view["任务"] = [
+            item for item in view["任务"] if str(item.get("模板编号") or "") == template_code
+        ]
+        view["受影响任务数"] = sum(1 for item in view["任务"] if not item["可启动"])
+    return view
+
+
+@router.get("/{entry_id}/impact", response_model=dict)
+def get_impact(entry_id: int) -> dict:
+    """任务详情：当前模板版本配置、可启动判断与前次运行固化的历史配置。"""
+    impact = service.task_impact(entry_id)
+    if impact is None:
+        raise HTTPException(status_code=404, detail=f"采集任务 {entry_id} 不存在或已归档")
+    return impact
+
+
+@router.get("/{entry_id}", response_model=dict)
+def get_entry(entry_id: int) -> dict:
+    """读取单条采集任务明细；不存在时给出可读的错误说明。"""
+    entry = service.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"采集任务 {entry_id} 不存在或已归档")
+    return entry
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
@@ -56,10 +90,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出采集任务清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "taskcrawl", "total": total, "items": items}

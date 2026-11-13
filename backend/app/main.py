@@ -5,14 +5,25 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import ROUTERS
+from app.services.versioning import version_service
 from app.store import store
 
-app = FastAPI(title="网络数据采集管理平台", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """启动时把模板种子数据纳入统一版本判定，后续变化走同一套失效传播。"""
+    version_service.bootstrap()
+    yield
+
+
+app = FastAPI(title="网络数据采集管理平台", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
